@@ -1,0 +1,420 @@
+import streamlit as st
+import json
+import os
+import random
+from datetime import datetime
+import streamlit.components.v1 as components
+
+# --- 1. PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="MindCare - Wellness Assistant",
+    page_icon="🧠",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
+
+# --- CUSTOM CSS ---
+st.markdown("""
+<style>
+    .stChatMessage { border-radius: 15px; padding: 10px; }
+    .stButton button { border-radius: 20px; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- CONFIGURATION ---
+HISTORY_FILE = "chat_history.json"
+QUESTIONS_FILE = "questions.json"
+DATABASE_FILE = "mindcare_db.json"  # New file to store Admin Data
+
+# --- EXPERT DATA ---
+doctors = [
+    {"name": "Dr. William Brown, Ph.D.", "specialty": "Clinical Psychologist", "icon": "👨‍⚕️"},
+    {"name": "Coach Emily Wilson", "specialty": "Certified Mindfulness Coach", "icon": "👩‍🏫"},
+    {"name": "Dr. Christopher Lee, M.D.", "specialty": "Psychiatrist", "icon": "👨‍⚕️"},
+    {"name": "Coach Olivia Johnson", "specialty": "Certified Life Coach", "icon": "👩‍💼"},
+    {"name": "Dr. Marcus Evans, Psy.D.", "specialty": "Clinical Psychologist", "icon": "👨‍⚕️"}
+]
+
+# --- 2. DATABASE SETUP & HELPER FUNCTIONS ---
+
+def save_user_report_to_db(username, mobile, quiz_data, final_score, result_text, advice):
+    """Saves complete user session to a persistent JSON file for Admin."""
+    if os.path.exists(DATABASE_FILE):
+        with open(DATABASE_FILE, "r", encoding='utf-8') as f:
+            try:
+                db_data = json.load(f)
+            except:
+                db_data = []
+    else:
+        db_data = []
+
+    new_record = {
+        "user_name": username,
+        "mobile": mobile,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "score": final_score,
+        "result": result_text,
+        "advice_given": advice,
+        "detailed_responses": quiz_data # List of Q&A
+    }
+    
+    db_data.append(new_record)
+    with open(DATABASE_FILE, "w", encoding='utf-8') as f:
+        json.dump(db_data, f, indent=4)
+
+# --- NEW FUNCTION: RESET STATE ---
+def reset_quiz_state():
+    """Ye function purana sara data clear karta hai taaki naya data save ho sake."""
+    keys_to_clear = ["messages", "quiz_active", "q_index", "cat_scores", "session_quiz_data", "saved_to_admin"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    if os.path.exists(HISTORY_FILE):
+        os.remove(HISTORY_FILE)
+
+def setup_files():
+    # Your original questions setup
+    if not os.path.exists(QUESTIONS_FILE):
+        all_questions = [
+            {"id": 1, "category": "Academic Stress", "question": "Assignment submit karne ke baad bhi kya aapko lagta hai ki wo galat hai?", "options": {"a": "Nahi", "b": "Kabhi kabhi", "c": "Hamesha"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 2, "category": "Academic Stress", "question": "Kya exam ki date paas aate hi aap panic feel karte hain?", "options": {"a": "Nahi", "b": "Thoda", "c": "Bahut zyada"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 3, "category": "Academic Stress", "question": "Kya padhai mein focus karna mushkil ho gaya hai?", "options": {"a": "Nahi", "b": "Thodi der baad", "c": "Haan, dimaag sunn pad jata hai"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 4, "category": "Social Anxiety", "question": "Kya naye logon se baat karne mein ghabrahat hoti hai?", "options": {"a": "Bilkul nahi", "b": "Thodi", "c": "Haan, bahut"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 5, "category": "Social Anxiety", "question": "Kya aapko lagta hai dost aapko judge kar rahe hain?", "options": {"a": "Nahi", "b": "Kabhi kabhi", "c": "Hamesha"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 6, "category": "Social Anxiety", "question": "Kya aap social events avoid karte hain?", "options": {"a": "Nahi", "b": "Mood par depend karta hai", "c": "Haan, darr lagta hai"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 7, "category": "Sleep Issues", "question": "Pichle hafte aapki neend kaisi thi?", "options": {"a": "Achi", "b": "Disturbed", "c": "Bilkul nahi so paya"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 8, "category": "Sleep Issues", "question": "Kya subah uthne ke baad bhi thakan lagti hai?", "options": {"a": "Nahi", "b": "Thodi", "c": "Bahut zyada"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 9, "category": "Low Confidence", "question": "Kya aapko lagta hai ki aap kisi kaam ke nahi hain?", "options": {"a": "Nahi", "b": "Kabhi kabhi", "c": "Aksar"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 10, "category": "Low Confidence", "question": "Kya aap apni galtiyon ke liye khud ko blame karte hain?", "options": {"a": "Nahi", "b": "Thoda", "c": "Haan, bahut"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 11, "category": "Family Pressure", "question": "Kya parents ki ummeedon ka bojh mehsoos hota hai?", "options": {"a": "Nahi", "b": "Kabhi kabhi", "c": "Haan, hamesha"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 12, "category": "Future Anxiety", "question": "Kya career ke baare mein soch kar panic hota hai?", "options": {"a": "Nahi", "b": "Thoda", "c": "Haan, bahut"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 13, "category": "Digital Addiction", "question": "Kya phone chalane ki wajah se aapka kaam ruk jata hai?", "options": {"a": "Nahi", "b": "Kabhi kabhi", "c": "Haan, control nahi hai"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 14, "category": "Loneliness", "question": "Kya aapko bheed mein bhi akela feel hota hai?", "options": {"a": "Nahi", "b": "Shayad", "c": "Haan, aksar"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 15, "category": "Anger Issues", "question": "Kya stress mein aapko chhoti baaton par gussa aata hai?", "options": {"a": "Nahi", "b": "Thoda", "c": "Haan, control nahi hota"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 16, "category": "Relationship Issues", "question": "Kya relationship ya breakup ki wajah se padhai disturb ho rahi hai?", "options": {"a": "Nahi", "b": "Thoda focus hila hai", "c": "Haan, kuch bhi karne ka mann nahi karta"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 17, "category": "Relationship Issues", "question": "Kya aapko relationship mein ghutan (suffocation) ya darr lagta hai?", "options": {"a": " me relationship me Nahi hu i am single ", "b": "Kabhi kabhi", "c": "Haan, main drained feel karta hu"}, "scores": {"a": 0, "b": 1, "c": 3}},
+            {"id": 18, "category": "Relationship Issues", "question": "Kya aap apni feelings partner ke sath khul ke share nahi kar paate?", "options": {"a": "Main share karta hu", "b": "Darr lagta hai ki wo kya sochenge", "c": "Bilkul nahi kar pata"}, "scores": {"a": 0, "b": 1, "c": 3}}
+        ]
+        with open(QUESTIONS_FILE, "w", encoding='utf-8') as f:
+            json.dump(all_questions, f, indent=4)
+
+def save_to_history(role, text):
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding='utf-8') as f:
+                history = json.load(f)
+        except:
+            history = []
+    entry = {"timestamp": str(datetime.now()), "role": role, "message": text}
+    history.append(entry)
+    with open(HISTORY_FILE, "w", encoding='utf-8') as f:
+        json.dump(history, f, indent=4)
+
+def load_history_from_file():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding='utf-8') as f:
+                data = json.load(f)
+                loaded_msgs = []
+                for entry in data:
+                    role = "assistant" if entry["role"] == "bot" else "user"
+                    loaded_msgs.append({"role": role, "content": entry["message"]})
+                return loaded_msgs
+        except:
+            return []
+    return []
+
+# --- 4. EXPERT CONSULTATION UI ---
+def render_expert_ui():
+    st.title("🏥 Talk with Coaches & Doctors")
+    st.write("Professional help is just a click away. Select an expert to start a private video call.")
+    st.markdown("---")
+    
+    for doc in doctors:
+        with st.container():
+            col1, col2, col3 = st.columns([1, 4, 2])
+            with col1:
+                st.write(f"## {doc['icon']}")
+            with col2:
+                st.markdown(f"**{doc['name']}**")
+                st.caption(doc['specialty'])
+            with col3:
+                call_id = doc['name'].replace(" ", "-").replace(".", "")
+                url = f"https://meet.jit.si/MindCare-{call_id}"
+                st.link_button("Chat & Call", url, type="primary", use_container_width=True)
+            st.markdown('<div style="margin-bottom: 20px;"></div>', unsafe_allow_html=True)
+
+# --- 5. MAIN APP LOGIC ---
+def main():
+    setup_files()
+
+    # --- LOGIN SYSTEM START ---
+    if "user_auth" not in st.session_state:
+        st.title("🛡️ MindCare - Registration")
+        st.info("Start karne ke liye apni details bharein.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            name_input = st.text_input("Name:")
+        with col2:
+            mobile_input = st.text_input("Mobile Number:")
+            
+        # Admin Login Trigger
+        if name_input == "admin" and mobile_input == "0000":
+            if st.button("Login as Admin"):
+                st.session_state.user_auth = {"name": "Admin", "type": "ADMIN"}
+                st.rerun()
+                
+        # Normal User Login
+        elif st.button("Start Assessment"):
+            if name_input and mobile_input:
+                # *** FIX: Reset everything when a new user starts ***
+                reset_quiz_state()
+                st.session_state.user_auth = {"name": name_input, "mobile": mobile_input, "type": "USER"}
+                st.session_state.session_quiz_data = [] 
+                st.rerun()
+            else:
+                st.error("Naam aur Mobile number zaroori hai.")
+        return
+    # --- LOGIN SYSTEM END ---
+    
+    # --- SIDEBAR NAVIGATION ---
+    with st.sidebar:
+        st.title(f"👋 Hi, {st.session_state.user_auth['name']}")
+        
+        # Check if Admin or User
+        if st.session_state.user_auth['type'] == "ADMIN":
+            choice = st.radio("Navigation", ["🔒 Admin Dashboard"])
+        else:
+            choice = st.radio("Navigation", ["🏠 Wellness Quiz", "📞 Talk with Experts"])
+        
+        st.markdown("---")
+        st.header("🆘 Emergency Contacts")
+        st.markdown("- 📞 **Kiran:** 1800-599-0019\n- 🚑 **Medical:** 112")
+        
+        st.markdown("---")
+        if st.button("🚪 Logout"):
+            reset_quiz_state() # Clear data on logout
+            del st.session_state.user_auth
+            st.rerun()
+            
+        if st.session_state.user_auth['type'] == "USER":
+            if st.button("🔄 Restart Assessment"):
+                reset_quiz_state() # Clear data on restart
+                st.rerun()
+
+    # --- ADMIN DASHBOARD LOGIC ---
+    if choice == "🔒 Admin Dashboard":
+        st.title("📊 Admin Panel (User Reports)")
+        st.write("Yahan aapko sabhi users ka quiz data milega.")
+        
+        if st.button("Refresh List"):
+            st.rerun()
+
+        if os.path.exists(DATABASE_FILE):
+            with open(DATABASE_FILE, "r", encoding='utf-8') as f:
+                records = json.load(f)
+            
+            st.metric("Total Users", len(records))
+            
+            for rec in reversed(records):
+                with st.expander(f"👤 {rec['user_name']} | Result: {rec['result']}"):
+                    st.write(f"📞 **Mobile:** {rec['mobile']}")
+                    st.write(f"📅 **Time:** {rec['timestamp']}")
+                    st.write(f"🏆 **Score:** {rec['score']}")
+                    st.divider()
+                    st.write("#### 📝 Quiz Details:")
+                    for i, q in enumerate(rec['detailed_responses']):
+                        st.markdown(f"**Q{i+1}:** {q['question']}")
+                        st.markdown(f"👉 **Ans:** {q['answer']}")
+                        st.write("---")
+                    st.info(f"💡 **Advice Given:** {rec['advice_given']}")
+        else:
+            st.info("No data available yet.")
+
+    # --- USER QUIZ LOGIC (ORIGINAL CODE) ---
+    elif choice == "🏠 Wellness Quiz":
+        st.title("🧠 Mental Wellness Checkup")
+        st.caption("Answers are private. Type a, b, or c to respond.")
+
+        # Load State
+        if "messages" not in st.session_state:
+            st.session_state.messages = load_history_from_file()
+
+        # Initialize tracking list if not exists
+        if "session_quiz_data" not in st.session_state:
+            st.session_state.session_quiz_data = []
+
+        # --- AUTO-START LOGIC ---
+        if not st.session_state.messages:
+            st.session_state.quiz_active = True
+            st.session_state.q_index = 0
+            st.session_state.cat_scores = {}
+            st.session_state.saved_to_admin = False # Reset save flag
+            
+            with open(QUESTIONS_FILE, "r") as f:
+                all_questions = json.load(f)
+            
+            num_questions = min(5, len(all_questions))
+            st.session_state.quiz_questions = random.sample(all_questions, num_questions)
+            
+            q1 = st.session_state.quiz_questions[0]
+            
+            # Professional Welcome Message
+            welcome_msg = f"""👋 **Hello! Welcome to MindCare.**
+            
+Main aapka mental wellness saathi hu. Chaliye ek chhota sa **5-Question Checkup** karte hain.
+            
+---
+**Question 1 of 5:**
+**{q1['question']}**
+
+* **a)** {q1['options']['a']}
+* **b)** {q1['options']['b']}
+* **c)** {q1['options']['c']}
+"""
+            st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
+            save_to_history("bot", welcome_msg)
+
+        # Initialize Variables
+        if "quiz_active" not in st.session_state:
+            st.session_state.quiz_active = False 
+            st.session_state.q_index = 0
+            st.session_state.quiz_questions = []
+            st.session_state.cat_scores = {}
+
+        # --- DISPLAY PROGRESS BAR ---
+        if st.session_state.quiz_active and st.session_state.q_index < 5:
+            progress = st.session_state.q_index / 5
+            st.progress(progress, text=f"Progress: Question {st.session_state.q_index + 1}/5")
+
+        # --- DISPLAY CHAT ---
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # --- USER INPUT ---
+        if prompt := st.chat_input("Select a, b, or c..."):
+            
+            st.chat_message("user").markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            save_to_history("user", prompt)
+
+            response = ""
+            
+            if st.session_state.quiz_active:
+                current_q = st.session_state.quiz_questions[st.session_state.q_index]
+                user_ans = prompt.lower().strip()
+                
+                if user_ans in current_q['scores']:
+                    # --- ADMIN TRACKING: Capture Question & Answer ---
+                    st.session_state.session_quiz_data.append({
+                        "question": current_q['question'],
+                        "answer": f"{user_ans}) {current_q['options'][user_ans]}"
+                    })
+                    # -----------------------------------------------
+
+                    cat = current_q.get("category", "General")
+                    points = current_q['scores'][user_ans]
+                    
+                    if cat not in st.session_state.cat_scores:
+                        st.session_state.cat_scores[cat] = 0
+                    st.session_state.cat_scores[cat] += points
+
+                    st.session_state.q_index += 1 
+                    
+                    # CHECK COMPLETION
+                    if st.session_state.q_index >= len(st.session_state.quiz_questions):
+                        scores = st.session_state.cat_scores
+                        total_score = sum(scores.values())
+                        
+                        if scores:
+                            max_category = max(scores, key=scores.get)
+                        else:
+                            max_category = "General"
+                        
+                        st.session_state.quiz_active = False
+                        
+                        # Determine Status
+                        if total_score <= 2:
+                            status_color, judgment, desc = "green", "Balanced & Healthy", "You are doing great! Keep it up."
+                        elif total_score <= 6:
+                            status_color, judgment, desc = "orange", "Mild Stress Detected", "You are slightly stressed. A break is recommended."
+                        else:
+                            status_color, judgment, desc = "red", "High Stress / Burnout", "Your stress levels are high. Please prioritize self-care."
+
+                        # Specific Advice Logic
+                        advice = ""
+                        if total_score > 2:
+                            if max_category == "Academic Stress": advice = "Break down syllabus into small steps. Focus on one topic at a time."
+                            elif max_category == "Social Anxiety": advice = "Remember: People are busy with their own lives. You are not being judged as much as you think."
+                            elif max_category == "Relationship Issues": advice = "Communication is key. If it hurts your peace, take some space."
+                            elif max_category == "Family Pressure": advice = "Respectfully communicate your feelings to your parents."
+                            elif max_category == "Sleep Issues": advice = "No screens 1 hour before bed. Try 4-7-8 breathing."
+                            else: advice = "Talking to a counselor can really help."
+                        else:
+                            advice = "Continue your current healthy routine!"
+
+                        response = f"""
+### 📊 Wellness Report
+
+**Overall Status:** :{status_color}[{judgment}]
+
+_{desc}_
+
+---
+**💡 Primary Insight:**
+Based on your answers, it seems **{max_category}** might be bothering you.
+
+**🩺 Doctor's Tip:**
+{advice}
+
+Agar aap expert se baat karna chahte hain, toh sidebar se **Talk with Experts** chunein.
+"""
+                        # --- ADMIN TRACKING: Save Final Report ---
+                        if not st.session_state.get("saved_to_admin", False):
+                            save_user_report_to_db(
+                                st.session_state.user_auth['name'],
+                                st.session_state.user_auth['mobile'],
+                                st.session_state.session_quiz_data,
+                                total_score,
+                                judgment,
+                                advice
+                            )
+                            st.session_state.saved_to_admin = True
+                        # ------------------------------------------
+
+                    else:
+                        # Next Question
+                        next_q = st.session_state.quiz_questions[st.session_state.q_index]
+                        q_num = st.session_state.q_index + 1
+                        response = f"""**Question {q_num} of 5:**
+                        
+**{next_q['question']}**
+
+* **a)** {next_q['options']['a']}
+* **b)** {next_q['options']['b']}
+* **c)** {next_q['options']['c']}"""
+                else:
+                    response = "⚠️ Please type just **a**, **b**, or **c**."
+            
+            else:
+                if "restart" in prompt.lower():
+                    reset_quiz_state()
+                    st.rerun()
+                else:
+                    response = "Assessment complete. Click **Restart Assessment** in the sidebar to try again, or visit **Talk with Experts** for help."
+
+            with st.chat_message("assistant"):
+                st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            save_to_history("bot", response)
+            st.rerun()
+
+    # --- EXPERT TALK LOGIC (ORIGINAL CODE) ---
+    elif choice == "📞 Talk with Experts":
+        render_expert_ui()
+
+if __name__ == "__main__":
+    main()
